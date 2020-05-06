@@ -180,6 +180,53 @@ class Group(metaclass=_GroupMeta):
         pass
 
 
+class NamedGroup(Group):
+    def make_group(self, sorted_cell_types):
+        self.group = [
+            c
+            for c in sorted_cell_types
+            if hasattr(c.placement, "group_name")
+            and c.placement.group_name == self.group_name
+        ]
+
+
+class DelegatedGroup(NamedGroup):
+    """
+        A delegated group delegates execution of the group's placement to the group leader.
+        Child classes can override `get_group_leader` to define this behavior. By default
+        the first member of the group that is encountered will be selected as the leader
+        and the `place` method of subsequent group members will not be executed.
+    """
+
+    def get_group_leader(self, sorted_cell_types):
+        return (
+            [
+                c
+                for c in sorted_cell_types
+                if hasattr(c.placement, "group_name")
+                and c.placement.group_name == self.group_name
+            ]
+            or [self.cell_type]
+        )[0]
+
+    def make_group(self, sorted_cell_types):
+        super().make_group(sorted_cell_types)
+        self.group_leader = self.get_group_leader(sorted_cell_types)
+        self.is_group_leader = self.group_leader.placement == self
+        self._before_placement_hooks.append(self.check_leader)
+        # TODO: Check if there are any sorted_cell_types that have me in "after"
+        # If so: place them after the group_leader instead and taint the order by raising `PlacementOrderTaintedError`
+        #
+        # The loop should catch this error, taint the order and continue, then afterwards recalculate.
+
+    def check_leader(self):
+        """
+            Checks if we are the group leader, if not placement execution should be interrupted.
+        """
+        if not self.is_group_leader:
+            raise InterruptPlacement
+
+
 class Entities(Layered, PlacementStrategy):
     """
         Implementation of the placement of entities (e.g., mossy fibers) that do not have
