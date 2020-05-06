@@ -1,20 +1,22 @@
-from .strategy import Layered, PlacementStrategy
+from .strategy import Layered, DelegatedGroup, PlacementStrategy
 from ..particles import ParticleSystem
 from ..exceptions import *
 from ..reporting import report, warn
 
 
-class ParticlePlacement(Layered, PlacementStrategy):
+class ParticlePlacement(Layered, DelegatedGroup, PlacementStrategy):
+    """
+        This placement strategy creates particles that repel eachother for each cell type
+        that is part of its group, specified by the optional attribute `group_name` in
+        each of its configured placement configuration nodes.
 
-    casts = {
-        "prune": bool,
-        "bounded": bool,
-    }
+        The repulsion is continued until no collisions remain. Any cells that have been placed
+        before the system is executed will be treated as "frozen" immovable particles.
+    """
 
-    defaults = {
-        "prune": True,
-        "bounded": False,
-    }
+    casts = {"prune": bool, "bounded": bool}
+
+    defaults = {"prune": True, "bounded": False}
 
     def place(self):
         cell_type = self.cell_type
