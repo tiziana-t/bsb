@@ -143,6 +143,43 @@ class Layered(MightBeRelative):
         return int(available_volume * placement.density)
 
 
+class _GroupMeta(abc.ABCMeta, type):
+    """
+        This metaclass should add a default `group_name = "default"` to the ConfigurableClass
+    """
+
+    def __init__(cls, name, bases, clsdict):
+        super(_GroupMeta, cls).__init__(name, bases, clsdict)
+        if not hasattr(cls, "defaults"):
+            cls.defaults = {"group_name": "default"}
+        elif not "group_name" in cls.defaults:
+            cls.defaults["group_name"] = "default"
+
+
+class Group(metaclass=_GroupMeta):
+    """
+        Group placement strategies are strategies that self-organise with or depend on
+        other placement strategies. During the `make_group` hook which is executed after
+        determining the placement order and before placement they have the opportunity to
+        inspect other placement types and the placement order. They can set attributes on
+        themselves or other placement strategies to influence placement.
+
+        If the `make_group` function returns False, the placement order is marked as
+        tainted and will be recalculated before executing the placement strategies.
+
+        A list of cell types that are part of the group is made available under each
+        PlacementStrategy's `group` attribute.
+
+        Membership to groups is by default determined by the `group_name` configuration
+        attribute but this behavior can be overridden by providing an alternative
+        implementation for the `make_group` method.
+    """
+
+    @abc.abstractmethod
+    def make_group(self, sorted_cell_types):
+        pass
+
+
 class Entities(Layered, PlacementStrategy):
     """
         Implementation of the placement of entities (e.g., mossy fibers) that do not have
