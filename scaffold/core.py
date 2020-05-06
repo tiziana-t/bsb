@@ -190,9 +190,25 @@ class Scaffold:
             Run the placement strategies of all cell types.
         """
         sorted_cell_types = CellType.resolve_order(self.configuration.cell_types)
+        # If _make_placement_groups returns true, one or more placement strategies
+        # have interrupted the placement order and it should be recalculated. Currently
+        # it can only be recalculated once. If there is a use case for it we could loop
+        # recalculation until all placement strategies agree on the groups and execution
+        # order.
+        if self._make_placement_groups(sorted_cell_types):
+            # Recalculate the placement order based on new grouping information
+            sorted_cell_types = CellType.resolve_order(self.configuration.cell_types)
+        # Loop over each cell type in sort order to place the cells.
         for cell_type in sorted_cell_types:
-            # Place cell type according to PlacementStrategy
-            cell_type.placement.place()
+            try:
+                # Run all the registered pre-execution hooks.
+                cell_type.placement._execute_before_placement_hooks()
+                # Place cell type according to PlacementStrategy
+                cell_type.placement.place()
+            except InterruptPlacement:
+                # This exception allows before_placement_hooks to prevent placement.
+                pass
+            cell_type.placement._execute_after_placement_hooks()
             if cell_type.entity:
                 entities = self.entities_by_type[cell_type.name]
                 report(
@@ -292,6 +308,25 @@ class Scaffold:
                     "{} {} placed ({}%).".format(count, type.name, percent,), 2,
                 )
             report("Average runtime: {}".format(np.average(times)), 2)
+
+    def _make_placement_groups(self, sorted_cell_types):
+        """
+            Calls the `make_group` function on each placement strategy that provides it.
+            This gives placement strategies a peek into the other cell types and their
+            placement order so that they can self-organise into groups or make other
+            preparations that also depend on other cell types.
+        """
+        tainted = False
+        for cell_type in sorted_cell_types:
+            placement = cell_type.placement
+            if hasattr(placement, "make_group") and callable(placement.make_group):
+                try:
+                    # If make_group interupts the placement order it should be considered
+                    # "tainted" and needs to be recalculated before execution.
+                    placement.make_group(sorted_cell_types)
+                except InterruptPlacementOrder:
+                    tainted = True
+        return tainted
 
     def _initialise_output_formatter(self):
         self.output_formatter = self.configuration.output_formatter

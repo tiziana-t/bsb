@@ -18,6 +18,11 @@ class PlacementStrategy(ConfigurableClass):
         self.placement_relative_to = None
         self.count = None
 
+        # Stores the hooks that intermediate strategies can register before and after the
+        # call to the `place` method.
+        self._before_placement_hooks = []
+        self._after_placement_hooks = []
+
     @abc.abstractmethod
     def place(self):
         pass
@@ -28,6 +33,14 @@ class PlacementStrategy(ConfigurableClass):
     @abc.abstractmethod
     def get_placement_count(self):
         pass
+
+    def _execute_before_placement_hooks(self):
+        for hook in self._before_placement_hooks:
+            hook()
+
+    def _execute_after_placement_hooks(self):
+        for hook in self._after_placement_hooks:
+            hook()
 
 
 class MightBeRelative:

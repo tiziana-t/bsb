@@ -209,3 +209,16 @@ class OrderError(ScaffoldError):
 
 class ClassError(ScaffoldError):
     pass
+
+
+# Interrupts
+class InterruptScaffold(InterruptedError):
+    pass
+
+
+class InterruptPlacement(InterruptScaffold):
+    pass
+
+
+class InterruptPlacementOrder(InterruptScaffold):
+    pass
