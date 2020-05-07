@@ -476,6 +476,11 @@ class SortableByAfter:
             self.create_after()
         self.get_after().append(after_item)
 
+    def remove_after(self, after_item):
+        if not self.has_after():
+            return
+        self.get_after().remove(after_item)
+
     def is_after_satisfied(self, objects):
         """
             Determine whether the `after` specification of this cell type is met.

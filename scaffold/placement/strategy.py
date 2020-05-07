@@ -214,10 +214,30 @@ class DelegatedGroup(NamedGroup):
         self.group_leader = self.get_group_leader(sorted_cell_types)
         self.is_group_leader = self.group_leader.placement == self
         self._before_placement_hooks.append(self.check_leader)
-        # TODO: Check if there are any sorted_cell_types that have me in "after"
-        # If so: place them after the group_leader instead and taint the order by raising `PlacementOrderTaintedError`
-        #
-        # The loop should catch this error, taint the order and continue, then afterwards recalculate.
+
+        # If we aren't the group leader, it is possible that other cell types that depend
+        # on being executed after us, will now fire after us, but before the group leader.
+        # At that point because we delegate our execution to the group leader, this
+        # dependency hasn't been fulfilled yet. To resolve this we should change the other
+        # placement's dependency to fire after the group leader rather than after us.
+        # Similarly if a member of the group has an after specification, then the after
+        # specification should be added to the group leader instead.
+        tainted = False
+        if not self.is_group_leader:
+            old_after = self.cell_type.name
+            new_after = self.group_leader.name
+            for cell_type in sorted_cell_types:
+                after = cell_type.get_after() or []
+                if old_after in after:
+                    tainted = True
+                    cell_type.remove_after(old_after)
+                    cell_type.add_after(new_after)
+            for after_type in self.cell_type.get_after() or []:
+                tainted = True
+                self.cell_type.remove_after(after_type)
+                self.group_leader.add_after(after_type)
+        if tainted:
+            raise InterruptPlacementOrder
 
     def check_leader(self):
         """
