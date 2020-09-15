@@ -72,6 +72,50 @@ class SimulatorAdapter(ConfigurableClass):
         """
         pass
 
+    def run_simulation(
+        self,
+        simulation_name,
+        before_prepare=None,
+        after_prepare=None,
+        after_simulate=None,
+    ):
+        """
+            Run a simulation. Prepares the simulator object and runs the configured
+            simulation.
+
+            Callbacks can be passed for ``before_prepare``, ``after_prepare`` and
+            ``after_simulate`` checkpoints.
+            
+            :param simulator_name: Name of the simulation to be ran. Needs to be a 
+              valid :guilabel:`simulations` config key.
+            :type simulator_name: str
+            :param before_prepare: Callable that's executed before ``adapter.prepare``
+              is called. Should take the adapter as only argument.
+            :type before_prepare: callable(adapter)
+            :param before_prepare: Callable that's executed after ``adapter.prepare``
+              is called. Should take the adapter and simulator as only arguments.
+            :type after_prepare: callable(adapter, simulator)
+            :param after_simulate: Callable that's executed after ``adapter.simulate``
+              has finished. Should take the adapter and simulator as only arguments.
+            :type after_prepare: callable(adapter, simulator)
+        """
+        t = time.time()
+        simulation, simulator = self.prepare_simulation(simulation_name)
+        # If we're reporting to a file, add a stream of progress event messages..
+        report_file = get_report_file()
+        if report_file:
+            listener = ReportListener(self, report_file)
+            simulation.add_progress_listener(listener)
+        simulation.simulate(simulator)
+        simulation.collect_output()
+        time_sim = time.time() - t
+        report("Simulation runtime: {}".format(time_sim), level=2)
+        if quit and hasattr(simulator, "quit"):
+            simulator.quit()
+        time_sim = time.time() - t
+        report("Simulation runtime: {}".format(time_sim), level=2)
+        return simulation
+
     def progress(self, progression, duration):
         report("Simulated {}/{}ms".format(progression, duration), level=3, ongoing=True)
         progress = types.SimpleNamespace(
