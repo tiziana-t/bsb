@@ -332,6 +332,7 @@ class NestAdapter(SimulatorAdapter):
         self.has_lock = False
         self.global_identifier_map = {}
         self.simulation_id = _randint()
+        self.random_generators = None
 
     def prepare(self):
         if self.is_prepared:
@@ -340,11 +341,11 @@ class NestAdapter(SimulatorAdapter):
             )
         report("Locking NEST kernel...", level=2)
         self.lock()
-        report("Installing  NEST modules...", level=2)
-        self.install_modules()
         if self.in_full_control():
             report("Initializing NEST kernel...", level=2)
             self.reset_kernel()
+        report("Installing  NEST modules...", level=2)
+        self.install_modules()
         report("Creating neurons...", level=2)
         self.create_neurons()
         report("Creating entities...", level=2)
@@ -434,7 +435,7 @@ class NestAdapter(SimulatorAdapter):
     def reset_kernel(self):
         self.nest.set_verbosity(self.verbosity)
         self.nest.ResetKernel()
-        self.reset_processes(self.threads)
+        self.reset_processes()
         self.nest.SetKernelStatus(
             {
                 "resolution": self.resolution,
@@ -457,22 +458,40 @@ class NestAdapter(SimulatorAdapter):
         # Use a constant reproducible master seed
         return 1989
 
-    def reset_processes(self, threads):
+    def get_thread_seeds(self):
+        msd = self.get_master_seed()
+        return list(range(msd + 1, msd + 1 + self.threads))
+
+    def get_python_seeds(self):
+        msd = self.get_master_seed()
+        return list(range(msd + self.threads + 2, msd + self.threads * 2 + 2))
+
+    def get_python_rngs(self):
+        return [np.random.RandomState(s) for s in self.get_python_seeds()]
+
+    def get_random(self):
+        if not hasattr(self, "random_generators"):
+            raise AdapterError("Random generators not initialized")
+        return self.random_generators[self.nest.Rank()]
+
+    def reset_processes(self):
         master_seed = self.get_master_seed()
-        total_num = _MPI_processes * threads
-        # Create a range of random seeds and generators.
-        random_generator_seeds = range(master_seed, master_seed + total_num)
-        # Create a different range of random seeds for the kernel.
-        thread_seeds = range(master_seed + 1 + total_num, master_seed + 1 + 2 * total_num)
-        success = True
+        thread_seeds = self.get_thread_seeds()
+        total_num = self.nest.NumProcesses() * self.threads
         try:
             # Update the kernel with the new RNG and thread state.
             self.nest.SetKernelStatus(
                 {
-                    "grng_seed": master_seed + total_num,
-                    "rng_seeds": thread_seeds,
                     "local_num_threads": threads,
                     "total_num_virtual_procs": total_num,
+                }
+            )
+            self.nest.SetKernelStatus(
+                {
+                    # Set the seed number for the global RNG that is shared between VP
+                    "grng_seed": master_seed,
+                    # Set a seed for each VP
+                    "rng_seeds": thread_seeds,
                 }
             )
         except Exception as e:
@@ -487,12 +506,10 @@ class NestAdapter(SimulatorAdapter):
                 ) from None
             else:
                 raise
-        if success:
-            self.threads_per_node = threads
-            self.virtual_processes = total_num
-            self.random_generators = [
-                np.random.RandomState(seed) for seed in random_generator_seeds
-            ]
+        else:
+            # Executed only if there's no exceptions
+            # Create a random generator per Python process (1 per VP)
+            self.random_generators = self.get_python_rngs()
 
     def simulate(self, simulator):
         if not self.is_prepared:
