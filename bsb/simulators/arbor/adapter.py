@@ -183,17 +183,57 @@ class ArborAdapter(SimulatorAdapter):
         recipe = self.get_recipe()
         domains = arbor.partition_load_balance(recipe, context)
         self.gids = set(itertools.chain(*(g.gids for g in domains.groups)))
+        self.recipe = recipe
+        self._lookup = QuickLookup(self)
+        self.types = set(self._lookup.lookup_model(gid).name for gid in self.gids)
+        print("Types created on", mpi.Get_rank(), self.types)
         print("prepared simulation, returning recipe")
+        if not mpi.Get_rank():
+            print(domains.groups)
         return arbor.simulation(recipe, domains, context)
 
     def simulate(self, simulation):
-        simulation.record(arbor.spike_recording.all)
-        # self.sampler = simulation.sample((0, 0), arbor.regular_schedule(0.1))
-        simulation.run(tfinal=5000)
+        if not mpi.Get_rank():
+            simulation.record(arbor.spike_recording.all)
+        self.soma_voltages = {}
+        for gid in self.gids:
+            try:
+                self.soma_voltages[gid] = simulation.sample(
+                    (gid, 0), arbor.regular_schedule(0.1)
+                )
+            except RuntimeError as e:
+                pass
+        print("arrived at simulation")
+        simulation.run(tfinal=50)
+        print("finished 1ms")
 
     def collect_output(self, simulation):
-        spikes = simulation.spikes()
-        # data, meta = simulation.samples(self.sampler)[0]
+        if not mpi.Get_rank():
+            spikes = simulation.spikes()
+            print("SIMULATION CREATED", len(spikes))
+            spikes = np.column_stack(
+                (
+                    np.fromiter((l[0][0] for l in spikes), dtype=int),
+                    np.fromiter((l[1] for l in spikes), dtype=int),
+                )
+            )
+            print(spikes.shape)
+            import plotly.graph_objs as go
+
+            go.Figure(go.Scatter(x=spikes[:, 1], y=spikes[:, 0], mode="markers")).show()
+        import plotly.graph_objs as go
+
+        go.Figure(
+            [
+                go.Scatter(
+                    x=simulation.samples(probe_handle)[0][0][:, 0],
+                    y=simulation.samples(probe_handle)[0][0][:, 1],
+                    name=str(gid),
+                )
+                for gid, probe_handle in self.soma_voltages.items()
+            ],
+            layout_title_text=f"Node {mpi.Get_rank()}",
+        ).show()
 
     def get_recipe(self):
         return ArborRecipe(self)
