@@ -37,6 +37,7 @@ class ArborCell(SimulationCell):
     node_name = "simulations.?.cell_models"
 
     def validate(self):
+        self.model_class = None
         if _has_arbor and not self.relay:
             self.model_class = get_configurable_class(self.model)
 
@@ -45,9 +46,7 @@ class ArborCell(SimulationCell):
             cell_decor = self.create_decor(gid)
             return self.model_class.cable_cell(decor=cell_decor)
         else:
-            # import dbbs_models
-            # return dbbs_models.GranuleCell.cable_cell()
-            return arbor.spike_source_cell(arbor.explicit_schedule([]))
+            return arbor.spike_source_cell("source_dud", arbor.explicit_schedule([]))
 
     def create_decor(self, gid):
         decor = arbor.decor()
@@ -55,7 +54,7 @@ class ArborCell(SimulationCell):
         return decor
 
     def _soma_detector(self, decor):
-        decor.place("(root)", arbor.spike_detector(-10))
+        decor.place("(root)", arbor.spike_detector(-10), "soma_spike_detector")
 
 
 class ArborDevice(SimulationCell):
@@ -109,8 +108,7 @@ class ArborRecipe(arbor.recipe):
     def __init__(self, adapter):
         super().__init__()
         self._adapter = adapter
-        self._catalogue = arbor.default_catalogue()
-        self._catalogue.extend(arbor.dbbs_catalogue(), "")
+        self._catalogue = self._get_catalogue()
         self._global_properties = arbor.neuron_cable_properties()
         self._global_properties.set_property(Vm=-65, tempK=300, rL=35.4, cm=0.01)
         self._global_properties.set_ion(ion="na", int_con=10, ext_con=140, rev_pot=50)
@@ -122,6 +120,25 @@ class ArborRecipe(arbor.recipe):
             ion="h", valence=1, int_con=1.0, ext_con=1.0, rev_pot=-34
         )
         self._global_properties.register(self._catalogue)
+
+    def _get_catalogue(self):
+        catalogue = arbor.default_catalogue()
+        models = set(
+            cell.model_class
+            for cell in self._adapter.cell_models.values()
+            if cell.model_class
+        )
+
+        def hash(cat):
+            return " ".join(sorted(cat))
+
+        catalogues = set((hash(catalogue),))
+        for model in models:
+            arbcat, prefix = model.catalogue()
+            if (cat_hash := hash(arbcat)) not in catalogues:
+                catalogues.add(cat_hash)
+                catalogue.extend(arbcat, prefix)
+        return catalogue
 
     def global_properties(self, kind):
         return self._global_properties
