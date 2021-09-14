@@ -23,7 +23,7 @@ except ImportError:
     import types
 
     # Mock missing requirements, as arbor is, like
-    # all simulators, an optional part of the BSB.
+    # all simulators, an optional dep. of the BSB.
     arbor = types.ModuleType("arbor")
     arbor.recipe = type("mock_recipe", (), dict())
 
@@ -45,6 +45,8 @@ class ArborCell(SimulationCell):
             cell_decor = self.create_decor(gid)
             return self.model_class.cable_cell(decor=cell_decor)
         else:
+            # import dbbs_models
+            # return dbbs_models.GranuleCell.cable_cell()
             return arbor.spike_source_cell(arbor.explicit_schedule([]))
 
     def create_decor(self, gid):
@@ -120,7 +122,6 @@ class ArborRecipe(arbor.recipe):
             ion="h", valence=1, int_con=1.0, ext_con=1.0, rev_pot=-34
         )
         self._global_properties.register(self._catalogue)
-        self._lookup = QuickLookup(adapter)
 
     def global_properties(self, kind):
         return self._global_properties
@@ -141,19 +142,27 @@ class ArborRecipe(arbor.recipe):
         return s
 
     def num_sources(self, gid):
-        return 1 if self._lookup.lookup_kind(gid) == arbor.cell_kind.cable else 0
+        return 1 if self._adapter._lookup.lookup_kind(gid) == arbor.cell_kind.cable else 0
 
     def cell_kind(self, gid):
-        return self._lookup.lookup_kind(gid)
+        # return arbor.cell_kind.cable
+        return self._adapter._lookup.lookup_kind(gid)
 
     def cell_description(self, gid):
-        model = self._lookup.lookup_model(gid)
+        model = self._adapter._lookup.lookup_model(gid)
         return model.get_description(gid)
 
+    def connections_on(self, gid):
+        return [
+            arbor.connection(arbor.cell_member(source, 0), 0, 1, 0.1)
+            for source in self._adapter._connections_on[gid]
+        ]
+
     def probes(self, gid):
+        # return [arbor.cable_probe_membrane_voltage("(root)")]
         return (
             [arbor.cable_probe_membrane_voltage("(root)")]
-            if self._lookup.lookup_kind(gid) == arbor.cell_kind.cable
+            if self._adapter._lookup.lookup_kind(gid) == arbor.cell_kind.cable
             else []
         )
 
@@ -172,6 +181,12 @@ class ArborAdapter(SimulatorAdapter):
 
     def prepare(self):
         try:
+            self.scaffold.assert_continuity()
+        except AssertionError as e:
+            raise AssertionError(
+                str(e) + " The arbor adapter requires completely continuous GIDs."
+            ) from None
+        try:
             context = arbor.context(arbor.proc_allocation(), mpi)
         except TypeError:
             if mpi.Get_size() > 1:
@@ -180,17 +195,15 @@ class ArborAdapter(SimulatorAdapter):
                     f"Arbor does not seem to be built with MPI support, running duplicate simulations on {s} nodes."
                 )
             context = arbor.context(arbor.proc_allocation())
-        recipe = self.get_recipe()
-        domains = arbor.partition_load_balance(recipe, context)
-        self.gids = set(itertools.chain(*(g.gids for g in domains.groups)))
-        self.recipe = recipe
         self._lookup = QuickLookup(self)
-        self.types = set(self._lookup.lookup_model(gid).name for gid in self.gids)
-        print("Types created on", mpi.Get_rank(), self.types)
-        print("prepared simulation, returning recipe")
-        if not mpi.Get_rank():
-            print(domains.groups)
-        return arbor.simulation(recipe, domains, context)
+        recipe = self.get_recipe()
+        self.domain = arbor.partition_load_balance(recipe, context)
+        self.gids = set(itertools.chain(*(g.gids for g in self.domain.groups)))
+        self._cache_connections()
+        print("preparing simulation")
+        simulation = arbor.simulation(recipe, self.domain, context)
+        print("prepared simulation")
+        return simulation
 
     def simulate(self, simulation):
         if not mpi.Get_rank():
@@ -198,11 +211,13 @@ class ArborAdapter(SimulatorAdapter):
         self.soma_voltages = {}
         for gid in self.gids:
             try:
+                if not mpi.Get_rank():
+                    print("Trying to probe", gid)
                 self.soma_voltages[gid] = simulation.sample(
                     (gid, 0), arbor.regular_schedule(0.1)
                 )
             except RuntimeError as e:
-                pass
+                print("WE ERROR ANYWAY ON PROBE ID", gid)
         print("arrived at simulation")
         simulation.run(tfinal=50)
         print("finished 1ms")
@@ -237,3 +252,12 @@ class ArborAdapter(SimulatorAdapter):
 
     def get_recipe(self):
         return ArborRecipe(self)
+
+    def _cache_connections(self):
+        self._connections_on = {gid: [] for gid in self.gids}
+        for conn_set in self.scaffold.get_connectivity_sets():
+            for from_gid, to_gid in conn_set.get_dataset():
+                from_gid = int(from_gid)
+                to_gid = int(to_gid)
+                if to_gid in self._connections_on:
+                    self._connections_on[to_gid].append(from_gid)
