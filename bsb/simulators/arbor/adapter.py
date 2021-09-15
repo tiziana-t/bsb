@@ -46,15 +46,22 @@ class ArborCell(SimulationCell):
             cell_decor = self.create_decor(gid)
             return self.model_class.cable_cell(decor=cell_decor)
         else:
-            return arbor.spike_source_cell("source_dud", arbor.explicit_schedule([]))
+            return arbor.spike_source_cell(
+                "soma_spike_detector", arbor.explicit_schedule([10, 15, 20, 25])
+            )
 
     def create_decor(self, gid):
         decor = arbor.decor()
         self._soma_detector(decor)
+        self._soma_synapse(decor)
         return decor
 
     def _soma_detector(self, decor):
         decor.place("(root)", arbor.spike_detector(-10), "soma_spike_detector")
+
+    def _soma_synapse(self, decor):
+        mech = arbor.mechanism("expsyn")
+        decor.place("(root)", mech, "soma_synapse")
 
 
 class ArborDevice(SimulationCell):
@@ -62,7 +69,10 @@ class ArborDevice(SimulationCell):
 
 
 class ArborConnection(SimulationComponent):
-    pass
+    defaults = {"gap": False}
+
+    def validate(self):
+        pass
 
 
 class QuickContains:
@@ -159,7 +169,7 @@ class ArborRecipe(arbor.recipe):
         return s
 
     def num_sources(self, gid):
-        return 1 if self._adapter._lookup.lookup_kind(gid) == arbor.cell_kind.cable else 0
+        return 1 if self._is_relay(gid) else 0
 
     def cell_kind(self, gid):
         # return arbor.cell_kind.cable
@@ -170,10 +180,26 @@ class ArborRecipe(arbor.recipe):
         return model.get_description(gid)
 
     def connections_on(self, gid):
+        if mpi.Get_rank():
+            return []
+        print("GID", gid, self._adapter._lookup.lookup_kind(gid))
+        if self._is_relay(gid):
+            print("No conns")
+            return []
+        print("From soma to soma")
         return [
-            arbor.connection(arbor.cell_member(source, 0), 0, 1, 0.1)
+            arbor.connection(self._from_soma(source[0]), self._to_soma(), source[1], 0.1)
             for source in self._adapter._connections_on[gid]
         ]
+
+    def _is_relay(self, gid):
+        return self._adapter._lookup.lookup_kind(gid) == arbor.cell_kind.spike_source
+
+    def _from_soma(self, gid):
+        return arbor.cell_global_label(gid, "soma_spike_detector")
+
+    def _to_soma(self):
+        return arbor.cell_local_label("soma_synapse")
 
     def probes(self, gid):
         # return [arbor.cable_probe_membrane_voltage("(root)")]
@@ -227,14 +253,9 @@ class ArborAdapter(SimulatorAdapter):
             simulation.record(arbor.spike_recording.all)
         self.soma_voltages = {}
         for gid in self.gids:
-            try:
-                if not mpi.Get_rank():
-                    print("Trying to probe", gid)
-                self.soma_voltages[gid] = simulation.sample(
-                    (gid, 0), arbor.regular_schedule(0.1)
-                )
-            except RuntimeError as e:
-                print("WE ERROR ANYWAY ON PROBE ID", gid)
+            self.soma_voltages[gid] = simulation.sample(
+                (gid, 0), arbor.regular_schedule(0.1)
+            )
         print("arrived at simulation")
         simulation.run(tfinal=50)
         print("finished 1ms")
@@ -249,23 +270,11 @@ class ArborAdapter(SimulatorAdapter):
                     np.fromiter((l[1] for l in spikes), dtype=int),
                 )
             )
-            print(spikes.shape)
-            import plotly.graph_objs as go
-
-            go.Figure(go.Scatter(x=spikes[:, 1], y=spikes[:, 0], mode="markers")).show()
-        import plotly.graph_objs as go
-
-        go.Figure(
-            [
-                go.Scatter(
-                    x=simulation.samples(probe_handle)[0][0][:, 0],
-                    y=simulation.samples(probe_handle)[0][0][:, 1],
-                    name=str(gid),
-                )
-                for gid, probe_handle in self.soma_voltages.items()
-            ],
-            layout_title_text=f"Node {mpi.Get_rank()}",
-        ).show()
+            np.savetxt("results_arbor/spikes.txt", spikes)
+        for gid, probe_handle in self.soma_voltages.items():
+            if (data := simulation.samples(probe_handle)) :
+                continue
+            np.savetxt(f"results_arbor/{gid}.txt", data[0][0])
 
     def get_recipe(self):
         return ArborRecipe(self)
@@ -273,8 +282,15 @@ class ArborAdapter(SimulatorAdapter):
     def _cache_connections(self):
         self._connections_on = {gid: [] for gid in self.gids}
         for conn_set in self.scaffold.get_connectivity_sets():
+            try:
+                conn_model = self.connection_models[conn_set.tag]
+            except KeyError:
+                raise AdapterError(f"Missing connection model `{conn_set.tag}`")
+            if conn_model.gap:
+                continue
+            w = conn_model.weight
             for from_gid, to_gid in conn_set.get_dataset():
                 from_gid = int(from_gid)
                 to_gid = int(to_gid)
                 if to_gid in self._connections_on:
-                    self._connections_on[to_gid].append(from_gid)
+                    self._connections_on[to_gid].append((from_gid, w))
