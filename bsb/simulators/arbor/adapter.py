@@ -10,9 +10,10 @@ from ...simulation import (
 from ...reporting import report, warn
 from ...exceptions import *
 from ...helpers import continuity_hop, get_configurable_class
+from mpi4py.MPI import COMM_WORLD as mpi
 import numpy as np
 import itertools
-from mpi4py.MPI import COMM_WORLD as mpi
+import os
 
 try:
     import arbor
@@ -180,13 +181,8 @@ class ArborRecipe(arbor.recipe):
         return model.get_description(gid)
 
     def connections_on(self, gid):
-        if mpi.Get_rank():
-            return []
-        print("GID", gid, self._adapter._lookup.lookup_kind(gid))
         if self._is_relay(gid):
-            print("No conns")
             return []
-        print("From soma to soma")
         return [
             arbor.connection(self._from_soma(source[0]), self._to_soma(), source[1], 0.1)
             for source in self._adapter._connections_on[gid]
@@ -257,10 +253,13 @@ class ArborAdapter(SimulatorAdapter):
                 (gid, 0), arbor.regular_schedule(0.1)
             )
         print("arrived at simulation")
-        simulation.run(tfinal=50)
-        print("finished 1ms")
+        simulation.run(tfinal=self.duration)
+        print(f"finished {self.duration}ms")
 
     def collect_output(self, simulation):
+        # import plotly.graph_objs as go
+
+        os.makedirs("results_arbor", exist_ok=True)
         if not mpi.Get_rank():
             spikes = simulation.spikes()
             print("SIMULATION CREATED", len(spikes))
@@ -271,10 +270,25 @@ class ArborAdapter(SimulatorAdapter):
                 )
             )
             np.savetxt("results_arbor/spikes.txt", spikes)
+            # go.Figure(go.Scatter(x=spikes[:, 1], y=spikes[:, 0], mode="markers")).show()
+
         for gid, probe_handle in self.soma_voltages.items():
-            if (data := simulation.samples(probe_handle)) :
+            if not (data := simulation.samples(probe_handle)):
                 continue
             np.savetxt(f"results_arbor/{gid}.txt", data[0][0])
+
+        # go.Figure(
+        #     [
+        #         go.Scatter(
+        #             x=data[0][0][:, 0],
+        #             y=data[0][0][:, 1],
+        #             name=str(gid),
+        #         )
+        #         for gid, probe_handle in self.soma_voltages.items()
+        #         if (data := simulation.samples(probe_handle))
+        #     ],
+        #     layout_title_text=f"Node {mpi.Get_rank()}",
+        # ).show()
 
     def get_recipe(self):
         return ArborRecipe(self)
