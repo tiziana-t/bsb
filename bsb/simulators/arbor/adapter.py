@@ -27,6 +27,11 @@ except ImportError:
     arbor = types.ModuleType("arbor")
     arbor.recipe = type("mock_recipe", (), dict())
 
+    def get(*arg):
+        raise ImportError("Arbor not installed.")
+
+    arbor.__getattr__ = get
+
 
 class ArborCell(SimulationCell):
     node_name = "simulations.?.cell_models"
