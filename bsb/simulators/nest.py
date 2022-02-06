@@ -1058,7 +1058,7 @@ class SpikeRecorder(SimulationRecorder):
             )
         return {
             "name": self.device_model.name,
-            "label": self.cell_types[0].name,
+            "label": self.device_model.parameters["label"],
             "cell_types": [ct.name for ct in self.cell_types],
             "color": self.cell_types[0].plotting.color,
             "parameters": json.dumps(self.device_model.parameters),

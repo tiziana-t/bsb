@@ -100,6 +100,8 @@ class FiberIntersection(ConnectionStrategy, MorphologyStrategy):
         fig = None
         fiber_cut_num = 0
         for c, (from_cell, from_morpho) in enumerate(from_morphology_set):
+            if c % 100 == 0:
+                print(f"PC n°: {c} from {labels_post}")
             # (1) Extract the FiberMorpho object for each branch in the from_compartments
             # of the presynaptic morphology
             compartments = from_morpho.get_compartments(from_compartments)
@@ -203,7 +205,7 @@ class FiberIntersection(ConnectionStrategy, MorphologyStrategy):
                     # Get the list of voxels that the to_voxel intersects with.
                     intersecting_voxels = voxel_intersections[to_voxel_id]
                     target_compartments = []
-
+                    # print("intersecting a to voxel")
                     for from_voxel_id in intersecting_voxels:
                         # Store all of the compartments in the from_voxel as
                         # possible candidates for these cells' connections

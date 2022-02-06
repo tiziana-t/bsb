@@ -6,6 +6,8 @@ from .morphologies import Compartment
 from contextlib import contextmanager
 import random, types
 from .reporting import warn
+import fnmatch
+import json
 
 
 class CellTrace:
@@ -962,11 +964,11 @@ def hdf5_plot_psth(
                     "Multiple cell types detected in a single dataset, can't perform proper PSTH"
                 )
             ct = network.configuration.cell_types[cts[0]]
-            l = ct.plotting.label
+            # l = ct.plotting.label
             color = ct.plotting.color
         elif l in network.configuration.cell_types:
             ct = network.configuration.cell_types[l]
-            l = ct.plotting.label
+            # l = ct.plotting.label
             color = ct.plotting.color
         if l not in row_map:
             color = g.attrs.get("color", color)
@@ -982,7 +984,7 @@ def hdf5_plot_psth(
     subplots_fig = make_subplots(
         cols=1,
         rows=len(psth.rows),
-        subplot_titles=[row.name for row in psth.ordered_rows()],
+        # subplot_titles=[row.name for row in psth.ordered_rows()],
         x_title=kwargs.get("x_title", "Time [ms]"),
         y_title=kwargs.get("y_title", "Population firing rate [Hz]"),
     )
@@ -1007,6 +1009,20 @@ def hdf5_plot_psth(
     for i, row in enumerate(psth.ordered_rows()):
         for name, stack in sorted(row.stacks.items(), key=lambda x: x[0]):
             counts, bins = np.histogram(stack.list, bins=np.arange(start, _max, duration))
+            if fnmatch.fnmatch(row.name, "purkinje_cell_scaffoldB*"):
+                d = dict(zip(bins, counts))
+                print(d)
+                stimul = [d[i] for i in d.keys() if i >= 100.0 and i <= 200.0]
+                non_stimul = [d[i] for i in d.keys() if i >= 300.0 and i <= 400.0]
+                s = np.mean(stimul)
+                ns = np.mean(non_stimul)
+                print(stimul)
+                print(non_stimul)
+                print(f"Spiking variation on spiking baseline:{(s-ns)/ns}")
+                with open("data.txt", "a") as file_object:
+                    file_object.write(str((s - ns) / ns))
+                    file_object.write("\n")
+
             # Workaround of Workarounds for merging info in scaffold and in results
             # Compares plotting colors to identify cell type ...
             for cell_type in cell_types:
